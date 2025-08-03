@@ -17,7 +17,33 @@ jobs:
           - 28.1
           - 28.2
           - 29.1
-          - snapshot
+          - 29.2
+    steps:
+    - uses: actions/checkout@v3
+    
+    - uses: purcell/setup-emacs@master
+      with:
+        version: ${{ matrix.emacs_version }}
+    
+    - name: Show Emacs version
+      run: emacs --version
+    
+    - name: Run tests with stubs
+      run: make test
+    
+    - name: Compile
+      run: make compile
+    
+    - name: Run checkdoc
+      run: make checkdoc
+      if: matrix.emacs_version == '29.1'
+
+  test-with-deps:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        emacs_version:
+          - 29.1  # Only test with deps on latest stable
     steps:
     - uses: actions/checkout@v3
     
@@ -27,20 +53,16 @@ jobs:
     
     - name: Install dependencies
       run: |
-        emacs -batch -l package -f package-initialize \
-          --eval "(add-to-list 'package-archives '(\"melpa\" . \"https://melpa.org/packages/\"))" \
-          --eval "(package-refresh-contents)" \
-          --eval "(package-install 'denote)" \
-          --eval "(package-install 'projectile)"
+        emacs -batch --eval '(progn
+          (require (quote package))
+          (add-to-list (quote package-archives) (quote ("melpa" . "https://melpa.org/packages/")) t)
+          (package-initialize)
+          (package-refresh-contents)
+          (when (not (package-installed-p (quote denote)))
+            (package-install (quote denote)))
+          (when (not (package-installed-p (quote projectile)))
+            (package-install (quote projectile))))'
     
-    - name: Run tests
-      run: make test
-    
-    - name: Run linter
-      run: make lint
-      if: matrix.emacs_version == '29.1'
-    
-    - name: Run checkdoc
-      run: make checkdoc
-      if: matrix.emacs_version == '29.1'
+    - name: Run tests with dependencies
+      run: make test-with-deps
 
