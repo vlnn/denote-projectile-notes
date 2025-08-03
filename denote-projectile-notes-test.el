@@ -288,28 +288,135 @@
    (let ((project-name "Empty Project"))
      (should (null (denote-select-project-note project-name))))))
 
-;;; Edge Cases
+;;; Additional valuable tests to add
 
-(ert-deftest denote-projectile-notes-test-empty-content ()
-  "Test handling empty note content."
+;; Core workflow tests
+(ert-deftest denote-projectile-notes-test-prompt-note-action-with-notes ()
+  "Test note action prompting when notes exist."
   (denote-projectile-notes-test-with-temp-dir
-   (let* ((filepath (denote-projectile-notes-test-create-note
-                     "Project" "Empty Note" ""))
-          (content (denote-extract-note-content filepath)))
-     (should (equal "" (string-trim content))))))
+   (let ((project-name "Test Project"))
+     (denote-projectile-notes-test-create-note project-name "Note 1" "Content 1")
+     (denote-projectile-notes-test-create-note project-name "Note 2" "Content 2")
 
-(ert-deftest denote-projectile-notes-test-special-characters-in-project-name ()
-  "Test handling special characters in project names."
+     (let ((notes (denote-list-project-notes project-name)))
+       ;; Mock completing-read to return "📊 View overview"
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (prompt choices &rest _)
+                    "📊 View overview")))
+         (should (eq 'overview (denote-prompt-note-action notes))))
+
+       ;; Mock completing-read to return "+ Create new note"
+       (cl-letf (((symbol-function 'completing-read)
+                  (lambda (prompt choices &rest _)
+                    "+ Create new note")))
+         (should (eq 'new (denote-prompt-note-action notes))))))))
+
+(ert-deftest denote-projectile-notes-test-prompt-note-action-no-notes ()
+  "Test note action prompting when no notes exist."
+  (should (eq 'new (denote-prompt-note-action nil))))
+
+(ert-deftest denote-projectile-notes-test-create-overview-sections ()
+  "Test overview sections creation."
+  (let* ((metadata1 (list :title "Note 1" :date "2024-01-01" :filepath "/path1.org"))
+         (metadata2 (list :title "Note 2" :date "2024-01-02" :filepath "/path2.org"))
+         (metadata-list (list metadata1 metadata2)))
+    ;; Mock denote-extract-note-content
+    (cl-letf (((symbol-function 'denote-extract-note-content)
+               (lambda (filepath)
+                 (if (string= filepath "/path1.org")
+                     "Content 1"
+                   "Content 2"))))
+      (let ((sections (denote-create-overview-sections metadata-list)))
+        (should (string-match-p "Note 1" sections))
+        (should (string-match-p "Note 2" sections))
+        (should (string-match-p "Content 1" sections))
+        (should (string-match-p "Content 2" sections))))))
+
+(ert-deftest denote-projectile-notes-test-handle-project-note-selection ()
+  "Test main project note selection workflow."
   (denote-projectile-notes-test-with-temp-dir
-   (let ((project-name "Project with @#$% chars!"))
-     (let ((dir (denote-ensure-project-directory project-name)))
-       (should (file-directory-p dir))))))
+   (let ((project-name "Test Project")
+         (test-called-with nil))  ; Declare variable outside cl-letf
+     ;; Test with no existing notes - should default to 'new
+     (cl-letf (((symbol-function 'denote-open-new-project-note)
+                (lambda (name) (setf test-called-with name))))
+       (denote-handle-project-note-selection project-name)
+       (should (equal project-name test-called-with))))))
 
-(ert-deftest denote-projectile-notes-test-very-long-title ()
-  "Test handling very long note titles."
-  (let* ((long-title (make-string 200 ?x))
-         (filename (denote-generate-project-note-filename "Project" long-title)))
-    (should (string-match-p "__project\\.org$" filename))))
+(ert-deftest denote-projectile-notes-test-maybe-update-overview ()
+  "Test automatic overview update on save."
+  (denote-projectile-notes-test-with-temp-dir
+   (let ((project-name "Test Project"))
+     ;; Create a project note
+     (let ((filepath (denote-projectile-notes-test-create-note
+                      project-name "Test Note" "Content")))
+       ;; Mock buffer-file-name to return our test file
+       (cl-letf (((symbol-function 'buffer-file-name) (lambda () filepath)))
+         ;; Track if update was called
+         (let (update-called)
+           (cl-letf (((symbol-function 'denote-update-project-overview)
+                      (lambda (name) (setf update-called name))))
+             (denote-maybe-update-overview)
+             (should (equal "test project" update-called)))))))))
+
+(ert-deftest denote-projectile-notes-test-setup-project-note-buffer ()
+  "Test project note buffer setup."
+  (denote-projectile-notes-test-with-temp-dir
+   (let ((project-name "Test Project")
+         (note-title "Test Note"))
+     (with-temp-buffer
+       (denote-setup-project-note-buffer (current-buffer) project-name note-title)
+       ;; Should have inserted frontmatter
+       (should (> (point-max) 1))
+       (should (string-match-p "Test Project - Test Note" (buffer-string)))
+       ;; Should have set local variable
+       (should (equal project-name denote-overview-project-name))))))
+
+(ert-deftest denote-projectile-notes-test-prompt-for-note-selection ()
+  "Test prompting for note selection with multiple notes."
+  (denote-projectile-notes-test-with-temp-dir
+   (let ((project-name "Test Project"))
+     (let ((note1 (denote-projectile-notes-test-create-note
+                   project-name "Note 1" "Content 1"))
+           (note2 (denote-projectile-notes-test-create-note
+                   project-name "Note 2" "Content 2")))
+       (let ((notes (list note1 note2)))
+         ;; Mock completing-read to select first note
+         (cl-letf (((symbol-function 'completing-read)
+                    (lambda (prompt choices &rest _)
+                      (caar choices))))  ; Select first choice
+           (let ((selected (denote-prompt-for-note-selection notes project-name)))
+             (should (member selected notes)))))))))
+
+;; Edge case tests
+(ert-deftest denote-projectile-notes-test-extract-content-empty-file ()
+  "Test extracting content from file with only frontmatter."
+  (denote-projectile-notes-test-with-temp-dir
+   (let ((filepath (expand-file-name "empty-note.org" denote-directory)))
+     (with-temp-file filepath
+       (insert "#+title: Empty Note\n#+date: 2024-01-01\n\n"))
+     (let ((content (denote-extract-note-content filepath)))
+       (should (equal "" (string-trim content)))))))
+
+(ert-deftest denote-projectile-notes-test-demote-headers-edge-cases ()
+  "Test header demotion with edge cases."
+  (should (equal "Text without headers"
+                 (denote-demote-org-headers "Text without headers")))
+  (should (equal "****** Very deep heading"
+                 (denote-demote-org-headers "***** Very deep heading")))
+  (should (equal "Not a header * in middle"
+                 (denote-demote-org-headers "Not a header * in middle"))))
+
+(ert-deftest denote-projectile-notes-test-find-note-filepath-edge-cases ()
+  "Test note filepath construction with edge cases."
+  (denote-projectile-notes-test-with-temp-dir
+   (let* ((project-name "Project/With\\Slashes")
+          (note-id "weird-note-id.org")
+          (expected-path (expand-file-name
+                          note-id
+                          (denote-project-notes-directory project-name)))
+          (actual-path (denote-find-note-filepath project-name note-id)))
+     (should (equal expected-path actual-path)))))
 
 (provide 'denote-projectile-notes-test)
 

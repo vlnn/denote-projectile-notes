@@ -72,7 +72,7 @@
     dir))
 
 ;; Note creation functions
-(defun denote-generate-project-note-filename (project-name note-title)
+(defun denote-generate-project-note-filename (_project-name note-title)
   "Generate filename for a project note with PROJECT-NAME and NOTE-TITLE."
   (format "%s--%s__project.org"
           (format-time-string "%Y%m%dT%H%M%S")
@@ -85,6 +85,7 @@
           note-title
           (denote-sluggify-title project-name)
           (format-time-string "%Y-%m-%d")))
+
 
 ;; Note discovery functions
 (defun denote-list-project-notes (project-name)
@@ -101,7 +102,7 @@
         (match-string 1)
       (file-name-base filepath))))
 
-(defun denote-format-note-for-selection (filepath project-name)
+(defun denote-format-note-for-selection (filepath _project-name)
   "Format FILEPATH for selection display."
   (let* ((title (denote-extract-note-title filepath))
          (mtime (file-attribute-modification-time (file-attributes filepath)))
@@ -375,7 +376,7 @@
 (defun denote-find-note-id-at-point ()
   "Find the NOTE_ID property in the current section."
   (save-excursion
-    (let ((original-point (point)))
+    (let ((_original-point (point)))
       (beginning-of-line)
       (unless (looking-at "^\\* ")
         (re-search-backward "^\\* " nil t))
