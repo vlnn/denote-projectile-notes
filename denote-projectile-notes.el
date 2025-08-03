@@ -52,99 +52,48 @@
 
 (require 'denote)
 (require 'projectile)
-(require 'cl-lib)
-
-;;; Custom Variables
 
 (defgroup denote-projectile-notes nil
   "Project-specific notes for Denote."
   :group 'denote
-  :prefix "denote-projectile-notes-")
+  :prefix "denote-projectile-")
 
-(defcustom denote-projectile-notes-subdirectory "projects/"
-  "Subdirectory within `denote-directory' for project notes."
-  :type 'string
-  :group 'denote-projectile-notes)
-
-(defcustom denote-projectile-notes-overview-auto-update t
-  "Whether to automatically update overview when saving project notes."
-  :type 'boolean
-  :group 'denote-projectile-notes)
-
-(defcustom denote-projectile-notes-overview-filename-suffix "-overview"
-  "Suffix for overview files."
-  :type 'string
-  :group 'denote-projectile-notes)
-
-(defcustom denote-projectile-notes-popup-side 'right
-  "Side where popup window appears."
-  :type '(choice (const left)
-          (const right)
-          (const top)
-          (const bottom))
-  :group 'denote-projectile-notes)
-
-(defcustom denote-projectile-notes-popup-size 0.4
-  "Size of the popup window (fraction of frame)."
-  :type 'number
-  :group 'denote-projectile-notes)
-
-;;; Variables
-
-(defvar-local denote-projectile-notes--opened-from-overview nil
-  "Whether current note was opened from overview.")
-
-(defvar-local denote-projectile-notes--project-name nil
-  "Project name associated with current buffer.")
-
-;;; Core Functions
-
-(defun denote-projectile-notes--directory (project-name)
+;; Helper functions for project note paths
+(defun denote-project-notes-directory (project-name)
   "Get the directory path for PROJECT-NAME notes."
-  (expand-file-name
-   (concat denote-projectile-notes-subdirectory
-           (denote-sluggify-title project-name))
-   denote-directory))
+  (expand-file-name (format "projects/%s" (denote-sluggify-title project-name))
+                    denote-directory))
 
-(defun denote-projectile-notes--ensure-directory (project-name)
+(defun denote-ensure-project-directory (project-name)
   "Ensure the directory for PROJECT-NAME exists."
-  (let ((dir (denote-projectile-notes--directory project-name)))
+  (let ((dir (denote-project-notes-directory project-name)))
     (unless (file-directory-p dir)
       (make-directory dir t))
     dir))
 
-(defun denote-projectile-notes--list-notes (project-name)
-  "List all note files for PROJECT-NAME."
-  (let ((dir (denote-projectile-notes--directory project-name)))
-    (when (file-directory-p dir)
-      (directory-files dir t "\\.org$"))))
-
-(defun denote-projectile-notes--generate-filename (_project-name note-title)
+;; Note creation functions
+(defun denote-generate-project-note-filename (project-name note-title)
   "Generate filename for a project note with PROJECT-NAME and NOTE-TITLE."
   (format "%s--%s__project.org"
           (format-time-string "%Y%m%dT%H%M%S")
           (denote-sluggify-title note-title)))
 
-(defun denote-projectile-notes--create-frontmatter (project-name note-title)
+(defun denote-create-project-note-frontmatter (project-name note-title)
   "Create frontmatter for a project note."
-  (format "#+title: %s - %s\n#+filetags: :project:%s:\n#+date: %s\n\n"
+  (format "#+startup: hidedrawers\n#+title: %s - %s\n#+filetags: :project:%s:\n#+date: %s\n\n"
           project-name
           note-title
           (denote-sluggify-title project-name)
           (format-time-string "%Y-%m-%d")))
 
-;;; Overview Functions
+;; Note discovery functions
+(defun denote-list-project-notes (project-name)
+  "List all note files for PROJECT-NAME."
+  (let ((dir (denote-project-notes-directory project-name)))
+    (when (file-directory-p dir)
+      (directory-files dir t "\\.org$"))))
 
-(defun denote-projectile-notes--overview-filepath (project-name)
-  "Get the overview note filepath for PROJECT-NAME."
-  (expand-file-name
-   (format "%s%s%s.org"
-           denote-projectile-notes-subdirectory
-           (denote-sluggify-title project-name)
-           denote-projectile-notes-overview-filename-suffix)
-   denote-directory))
-
-(defun denote-projectile-notes--extract-note-title (filepath)
+(defun denote-extract-note-title (filepath)
   "Extract the note title from FILEPATH."
   (with-temp-buffer
     (insert-file-contents filepath nil 0 200)
@@ -152,287 +101,354 @@
         (match-string 1)
       (file-name-base filepath))))
 
-(defun denote-projectile-notes--extract-note-content (filepath)
+(defun denote-format-note-for-selection (filepath project-name)
+  "Format FILEPATH for selection display."
+  (let* ((title (denote-extract-note-title filepath))
+         (mtime (file-attribute-modification-time (file-attributes filepath)))
+         (date (format-time-string "%Y-%m-%d" mtime)))
+    (format "%-40s  [%s]" title date)))
+
+;; Selection interface
+(defun denote-select-project-note (project-name)
+  "Select a note from PROJECT-NAME's notes."
+  (let ((notes (denote-list-project-notes project-name)))
+    (cond
+     ((null notes) nil)
+     ((= (length notes) 1) (car notes))
+     (t (denote-prompt-for-note-selection notes project-name)))))
+
+(defun denote-prompt-for-note-selection (notes project-name)
+  "Prompt user to select from NOTES list."
+  (let* ((choices (mapcar (lambda (note)
+                            (cons (denote-format-note-for-selection note project-name)
+                                  note))
+                          notes))
+         (selection (completing-read
+                     (format "Select note for %s: " project-name)
+                     choices nil t)))
+    (cdr (assoc selection choices))))
+
+;; New note creation
+(defun denote-create-new-project-note (project-name)
+  "Create a new note for PROJECT-NAME."
+  (let* ((note-title (read-string "Note title: "))
+         (dir (denote-ensure-project-directory project-name))
+         (filename (denote-generate-project-note-filename project-name note-title))
+         (filepath (expand-file-name filename dir)))
+    (cons filepath note-title)))
+
+;; Keybinding setup with proper guards
+(defun denote-setup-base-keybindings ()
+  "Setup base keybindings that work in all contexts."
+  (local-set-key (kbd "q") #'denote-smart-close-popup)
+  (local-set-key (kbd "<escape>") #'denote-smart-close-popup))
+
+(defun denote-setup-evil-keybindings ()
+  "Setup Evil-specific keybindings when Evil is available."
+  (when (and (featurep 'evil)
+             (fboundp 'evil-local-set-key)
+             (bound-and-true-p evil-mode))
+    (evil-local-set-key 'normal (kbd "q") #'denote-smart-close-popup)
+    (evil-local-set-key 'normal (kbd "<escape>") #'denote-smart-close-popup)))
+
+(defun denote-setup-popup-keybindings ()
+  "Setup keybindings for popup buffer."
+  (denote-setup-base-keybindings)
+  (denote-setup-evil-keybindings))
+
+(defun denote-setup-overview-base-keys ()
+  "Setup base overview keybindings."
+  (local-set-key (kbd "g") #'denote-refresh-overview)
+  (local-set-key (kbd "RET") #'denote-open-note-at-point))
+
+(defun denote-setup-overview-evil-keys ()
+  "Setup Evil overview keybindings when available."
+  (when (and (featurep 'evil)
+             (fboundp 'evil-local-set-key)
+             (bound-and-true-p evil-mode))
+    (evil-local-set-key 'normal (kbd "g") #'denote-refresh-overview)
+    (evil-local-set-key 'normal (kbd "RET") #'denote-open-note-at-point)))
+
+(defun denote-setup-overview-keybindings ()
+  "Setup all overview keybindings."
+  (denote-setup-base-keybindings)
+  (denote-setup-evil-keybindings)
+  (denote-setup-overview-base-keys)
+  (denote-setup-overview-evil-keys))
+
+;; Popup management
+(defun denote-smart-close-popup ()
+  "Close popup or return to overview based on how it was opened."
+  (interactive)
+  (save-buffer)
+  (if (bound-and-true-p denote-opened-from-overview)
+      (denote-return-to-overview)
+    (if (fboundp '+popup/close)
+        (+popup/close)
+      (quit-window))))
+
+(defun denote-return-to-overview ()
+  "Return to the overview that opened this note."
+  (let ((project-name (bound-and-true-p denote-overview-project-name)))
+    (if (fboundp '+popup/close)
+        (+popup/close)
+      (quit-window))
+    (when project-name
+      (when-let ((overview-path (denote-project-overview-filepath project-name)))
+        (when-let ((existing-buffer (find-buffer-visiting overview-path)))
+          (with-current-buffer existing-buffer
+            (revert-buffer t t t))))
+      (denote-open-project-overview project-name))))
+
+(defun denote-save-and-close-popup ()
+  "Save buffer and close popup."
+  (interactive)
+  (save-buffer)
+  (if (fboundp '+popup/close)
+      (+popup/close)
+    (quit-window)))
+
+(defun denote-open-project-popup (buffer)
+  "Open BUFFER in a popup window and focus it."
+  (if (fboundp '+popup-buffer)
+      (let ((popup-window (+popup-buffer buffer '((side . right) (size . 0.4)))))
+        (when popup-window
+          (select-window popup-window)))
+    (pop-to-buffer buffer)))
+
+(defun denote-setup-project-note-buffer (buffer project-name note-title)
+  "Setup BUFFER for a project note."
+  (with-current-buffer buffer
+    (when (= (point-max) 1)
+      (insert (denote-create-project-note-frontmatter project-name note-title)))
+    (denote-setup-popup-keybindings)
+    (setq-local denote-overview-project-name project-name)))
+
+;; Overview note functions
+(defun denote-project-overview-filepath (project-name)
+  "Get the overview note filepath for PROJECT-NAME."
+  (expand-file-name
+   (format "projects/%s-overview.org" (denote-sluggify-title project-name))
+   denote-directory))
+
+(defun denote-extract-note-content (filepath)
   "Extract content from note at FILEPATH, excluding frontmatter."
   (with-temp-buffer
     (insert-file-contents filepath)
     (goto-char (point-min))
+    ;; Skip frontmatter
     (while (looking-at "^#\\+")
       (forward-line))
     (skip-chars-forward "\n")
     (buffer-substring-no-properties (point) (point-max))))
 
-(defun denote-projectile-notes--get-note-metadata (filepath)
+(defun denote-get-note-metadata (filepath)
   "Extract metadata from note at FILEPATH."
   (let ((mtime (file-attribute-modification-time (file-attributes filepath))))
-    (list :title (denote-projectile-notes--extract-note-title filepath)
+    (list :title (denote-extract-note-title filepath)
           :date (format-time-string "%Y-%m-%d %H:%M" mtime)
           :filepath filepath
           :mtime mtime)))
 
-(defun denote-projectile-notes--sort-notes-by-date (notes)
+(defun denote-sort-notes-by-date (notes)
   "Sort NOTES by modification time, newest first."
   (sort notes (lambda (a b)
                 (time-less-p (plist-get b :mtime)
                              (plist-get a :mtime)))))
 
-(defun denote-projectile-notes--demote-org-headers (content)
+(defun denote-demote-org-headers (content)
   "Demote all org headers in CONTENT by one level."
-  (replace-regexp-in-string "^\\(\\*+\\) " "*\\1 " content))
+  (replace-regexp-in-string
+   "^\\(\\*+\\) "
+   "*\\1 "
+   content))
 
-(defun denote-projectile-notes--format-note-section (metadata content)
+(defun denote-format-note-section (metadata content)
   "Format a note section with METADATA and CONTENT."
   (format "* %s [%s]\n:PROPERTIES:\n:SOURCE: [[file:%s][Open]]\n:NOTE_ID: %s\n:END:\n\n%s\n"
           (plist-get metadata :title)
           (plist-get metadata :date)
           (plist-get metadata :filepath)
           (file-name-nondirectory (plist-get metadata :filepath))
-          (denote-projectile-notes--demote-org-headers (string-trim content))))
+          (denote-demote-org-headers (string-trim content))))
 
-(defun denote-projectile-notes--generate-overview-content (project-name)
+(defun denote-generate-overview-content (project-name)
   "Generate overview content for PROJECT-NAME."
-  (let* ((notes (denote-projectile-notes--list-notes project-name))
-         (metadata-list (mapcar #'denote-projectile-notes--get-note-metadata notes))
-         (sorted-metadata (denote-projectile-notes--sort-notes-by-date metadata-list)))
-    (concat
-     (format "#+title: %s - Overview\n#+filetags: :project:%s:overview:\n#+date: %s\n\n"
-             project-name
-             (denote-sluggify-title project-name)
-             (format-time-string "%Y-%m-%d"))
-     (format "This is an auto-generated overview of all notes for project: %s\n"
-             project-name)
-     (format "Last updated: %s\n\n" (format-time-string "%Y-%m-%d %H:%M"))
-     (mapconcat
-      (lambda (metadata)
-        (let ((content (denote-projectile-notes--extract-note-content
-                        (plist-get metadata :filepath))))
-          (denote-projectile-notes--format-note-section metadata content)))
-      sorted-metadata
-      "\n"))))
+  (let* ((notes (denote-list-project-notes project-name))
+         (metadata-list (mapcar #'denote-get-note-metadata notes))
+         (sorted-metadata (denote-sort-notes-by-date metadata-list))
+         (header (denote-create-overview-header project-name))
+         (sections (denote-create-overview-sections sorted-metadata)))
+    (concat header sections)))
 
-(defun denote-projectile-notes--update-overview (project-name)
+(defun denote-create-overview-header (project-name)
+  "Create header for PROJECT-NAME overview."
+  (format "#+title: %s - Overview\n#+filetags: :project:%s:overview:\n#+date: %s\n\nThis is an auto-generated overview of all notes for project: %s\nLast updated: %s\n\n"
+          project-name
+          (denote-sluggify-title project-name)
+          (format-time-string "%Y-%m-%d")
+          project-name
+          (format-time-string "%Y-%m-%d %H:%M")))
+
+(defun denote-create-overview-sections (metadata-list)
+  "Create sections from METADATA-LIST."
+  (mapconcat
+   (lambda (metadata)
+     (let ((content (denote-extract-note-content (plist-get metadata :filepath))))
+       (denote-format-note-section metadata content)))
+   metadata-list
+   "\n"))
+
+(defun denote-update-project-overview (project-name)
   "Update or create overview for PROJECT-NAME."
-  (let ((filepath (denote-projectile-notes--overview-filepath project-name))
-        (content (denote-projectile-notes--generate-overview-content project-name)))
+  (let ((filepath (denote-project-overview-filepath project-name))
+        (content (denote-generate-overview-content project-name)))
     (with-temp-file filepath
       (insert content))
     filepath))
 
-;;; Navigation Functions
-
-(defun denote-projectile-notes--find-note-id-at-point ()
-  "Find the NOTE_ID property in the current section."
-  (save-excursion
-    (beginning-of-line)
-    (unless (looking-at "^\\* ")
-      (re-search-backward "^\\* " nil t))
-    (let ((section-start (point)))
-      (forward-line 1)
-      (let ((section-end (if (re-search-forward "^\\* " nil t)
-                             (match-beginning 0)
-                           (point-max))))
-        (goto-char section-start)
-        (when (re-search-forward "^:NOTE_ID: \\(.+\\)$" section-end t)
-          (match-string 1))))))
-
-;;; Interactive Functions
-
-(defun denote-projectile-notes--format-note-for-selection (filepath _project-name)
-  "Format FILEPATH for selection display."
-  (let* ((title (denote-projectile-notes--extract-note-title filepath))
-         (mtime (file-attribute-modification-time (file-attributes filepath)))
-         (date (format-time-string "%Y-%m-%d" mtime)))
-    (format "%-40s  [%s]" title date)))
-
-(defun denote-projectile-notes--select-action (existing-notes project-name)
-  "Prompt for action with EXISTING-NOTES."
-  (let ((choices (if existing-notes
-                     (append '(("📊 View overview" . overview)
-                               ("+ Create new note" . new))
-                             (mapcar (lambda (note)
-                                       (cons (denote-projectile-notes--format-note-for-selection
-                                              note project-name)
-                                             note))
-                                     existing-notes))
-                   '(("+ Create new note" . new)))))
-    (cdr (assoc (completing-read "Select note: " choices nil t) choices))))
-
-;;;###autoload
-(defun denote-projectile-notes ()
+;; Main interactive functions
+(defun denote-project-notes ()
   "Open or create a project note for current project."
   (interactive)
-  (if-let ((project-name (projectile-project-name)))
-      (let* ((existing-notes (denote-projectile-notes--list-notes project-name))
-             (choice (denote-projectile-notes--select-action existing-notes project-name)))
-        (cond
-         ((eq choice 'new)
-          (denote-projectile-notes-new))
-         ((eq choice 'overview)
-          (denote-projectile-notes-overview))
-         ((stringp choice)
-          (denote-projectile-notes--open-note choice))
-         (t (message "Cancelled"))))
+  (if-let ((project-name (and (fboundp 'projectile-project-name)
+                              (projectile-project-name))))
+      (denote-handle-project-note-selection project-name)
     (message "Not in a projectile project")))
 
-;;;###autoload
-(defun denote-projectile-notes-new ()
-  "Create a new project note directly."
-  (interactive)
-  (if-let ((project-name (projectile-project-name)))
-      (let* ((note-title (read-string "Note title: "))
-             (dir (denote-projectile-notes--ensure-directory project-name))
-             (filename (denote-projectile-notes--generate-filename project-name note-title))
-             (filepath (expand-file-name filename dir))
-             (content (denote-projectile-notes--create-frontmatter project-name note-title)))
-        (with-temp-file filepath
-          (insert content))
-        (denote-projectile-notes--open-note filepath t))
-    (message "Not in a projectile project")))
+(defun denote-handle-project-note-selection (project-name)
+  "Handle note selection or creation for PROJECT-NAME."
+  (let* ((existing-notes (denote-list-project-notes project-name))
+         (choice (denote-prompt-note-action existing-notes)))
+    (cond
+     ((eq choice 'new)
+      (denote-open-new-project-note project-name))
+     ((eq choice 'overview)
+      (denote-open-project-overview project-name))
+     ((stringp choice)
+      (denote-open-existing-project-note choice))
+     (t (message "Cancelled")))))
 
-;;;###autoload
-(defun denote-projectile-notes-overview ()
-  "Open overview for current project."
-  (interactive)
-  (if-let ((project-name (projectile-project-name)))
-      (let ((filepath (denote-projectile-notes--update-overview project-name)))
-        (denote-projectile-notes--open-overview filepath project-name))
-    (message "Not in a projectile project")))
+(defun denote-prompt-note-action (existing-notes)
+  "Prompt for action with EXISTING-NOTES."
+  (if existing-notes
+      (let ((choices (append '(("📊 View overview" . overview)
+                               ("+ Create new note" . new))
+                             (mapcar (lambda (note)
+                                       (cons (denote-format-note-for-selection note nil)
+                                             note))
+                                     existing-notes))))
+        (cdr (assoc (completing-read "Select note: " choices nil t) choices)))
+    'new))
 
-;;; Buffer Management
+(defun denote-open-new-project-note (project-name)
+  "Create and open a new note for PROJECT-NAME."
+  (let* ((result (denote-create-new-project-note project-name))
+         (filepath (car result))
+         (note-title (cdr result))
+         (buffer (find-file-noselect filepath)))
+    (denote-setup-project-note-buffer buffer project-name note-title)
+    (denote-open-project-popup buffer)))
 
-(defun denote-projectile-notes--open-note (filepath &optional new-note _note-title)
-  "Open note at FILEPATH."
+(defun denote-open-existing-project-note (filepath)
+  "Open existing note at FILEPATH."
   (let ((buffer (find-file-noselect filepath)))
     (with-current-buffer buffer
-      (when new-note
-        (goto-char (point-max)))
-      (denote-projectile-notes-mode 1))
-    (denote-projectile-notes--display-popup buffer)))
+      (denote-setup-popup-keybindings)
+      (unless (bound-and-true-p denote-overview-project-name)
+        (when (string-match "/projects/\\([^/]+\\)/" filepath)
+          (setq-local denote-overview-project-name
+                      (denote-unslugify-project-name (match-string 1 filepath))))))
+    (denote-open-project-popup buffer)))
 
-(defun denote-projectile-notes--open-overview (filepath project-name)
-  "Open overview at FILEPATH for PROJECT-NAME."
-  (let ((buffer (find-file-noselect filepath)))
+(defun denote-open-project-overview (project-name)
+  "Open or create overview for PROJECT-NAME."
+  (let* ((filepath (denote-update-project-overview project-name))
+         (buffer (find-file-noselect filepath)))
     (with-current-buffer buffer
-      (denote-projectile-notes-overview-mode)
-      (setq-local denote-projectile-notes--project-name project-name))
-    (denote-projectile-notes--display-popup buffer)))
+      (denote-setup-overview-keybindings)
+      (read-only-mode 1)
+      (setq-local denote-overview-project-name project-name))
+    (denote-open-project-popup buffer)))
 
-(defun denote-projectile-notes--display-popup (buffer)
-  "Display BUFFER in popup window."
-  (if (fboundp '+popup-buffer)
-      ;; Doom Emacs style
-      (let ((window (+popup-buffer buffer
-                                   `((side . ,denote-projectile-notes-popup-side)
-                                     (size . ,denote-projectile-notes-popup-size)))))
-        (when window (select-window window)))
-    ;; Fallback to standard display
-    (pop-to-buffer buffer)))
+;; Navigation functions for overview
+(defun denote-find-note-id-at-point ()
+  "Find the NOTE_ID property in the current section."
+  (save-excursion
+    (let ((original-point (point)))
+      (beginning-of-line)
+      (unless (looking-at "^\\* ")
+        (re-search-backward "^\\* " nil t))
+      (let ((section-start (point)))
+        (forward-line 1)
+        (let ((section-end (if (re-search-forward "^\\* " nil t)
+                               (match-beginning 0)
+                             (point-max))))
+          (goto-char section-start)
+          (when (re-search-forward "^:NOTE_ID: \\(.+\\)$" section-end t)
+            (match-string 1)))))))
 
-;;; Minor Mode
-
-(defvar denote-projectile-notes-mode-map
-  (let ((map (make-sparse-keymap)))
-    (when (fboundp 'evil-define-key)
-      (evil-define-key 'normal map
-        "q" #'denote-projectile-notes-close
-        (kbd "<escape>") #'denote-projectile-notes-close))
-    map)
-  "Keymap for `denote-projectile-notes-mode'.")
-
-(define-minor-mode denote-projectile-notes-mode
-  "Minor mode for project notes."
-  :lighter " DPN"
-  :keymap denote-projectile-notes-mode-map
-  (when denote-projectile-notes-mode
-    (when (string-match "/projects/\\([^/]+\\)/" (buffer-file-name))
-      (setq-local denote-projectile-notes--project-name
-                  (denote-projectile-notes--unslugify
-                   (match-string 1 (buffer-file-name)))))))
-
-(defun denote-projectile-notes-close ()
-  "Close current note, returning to overview if applicable."
+(defun denote-open-note-at-point ()
+  "Open the note file corresponding to the current section."
   (interactive)
-  (save-buffer)
-  (if denote-projectile-notes--opened-from-overview
-      (denote-projectile-notes-overview)
-    (if (fboundp '+popup/close)
-        (+popup/close)
-      (quit-window))))
-
-;;; Overview Mode
-
-(defvar denote-projectile-notes-overview-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") #'denote-projectile-notes-open-at-point)
-    (define-key map (kbd "g") #'denote-projectile-notes-refresh-overview)
-    (when (fboundp 'evil-define-key)
-      (evil-define-key 'normal map
-        (kbd "RET") #'denote-projectile-notes-open-at-point
-        "g" #'denote-projectile-notes-refresh-overview
-        "q" #'denote-projectile-notes-close
-        (kbd "<escape>") #'denote-projectile-notes-close))
-    map)
-  "Keymap for `denote-projectile-notes-overview-mode'.")
-
-(define-derived-mode denote-projectile-notes-overview-mode org-mode "DPN-Overview"
-  "Major mode for project note overviews."
-  (read-only-mode 1))
-
-(defun denote-projectile-notes-open-at-point ()
-  "Open the note at point."
-  (interactive)
-  (when-let* ((note-id (denote-projectile-notes--find-note-id-at-point))
-              (project-name denote-projectile-notes--project-name)
-              (filepath (expand-file-name note-id
-                                          (denote-projectile-notes--directory project-name))))
+  (when-let* ((note-id (denote-find-note-id-at-point))
+              (project-name (bound-and-true-p denote-overview-project-name))
+              (filepath (denote-find-note-filepath project-name note-id)))
     (if (file-exists-p filepath)
         (let ((buffer (find-file-noselect filepath)))
           (with-current-buffer buffer
-            (denote-projectile-notes-mode 1)
-            (setq-local denote-projectile-notes--opened-from-overview t)
-            (setq-local denote-projectile-notes--project-name project-name))
-          (denote-projectile-notes--display-popup buffer))
+            (denote-setup-popup-keybindings)
+            (setq-local denote-opened-from-overview t)
+            (setq-local denote-overview-project-name project-name))
+          (denote-open-project-popup buffer))
       (message "Note file not found: %s" note-id))))
 
-(defun denote-projectile-notes-refresh-overview ()
-  "Refresh the current overview."
+(defun denote-find-note-filepath (project-name note-id)
+  "Find full filepath for NOTE-ID in PROJECT-NAME."
+  (expand-file-name note-id (denote-project-notes-directory project-name)))
+
+(defun denote-refresh-overview ()
+  "Refresh the current overview buffer."
   (interactive)
-  (when denote-projectile-notes--project-name
+  (when (bound-and-true-p denote-overview-project-name)
     (let ((inhibit-read-only t)
           (point (point)))
       (erase-buffer)
-      (insert (denote-projectile-notes--generate-overview-content
-               denote-projectile-notes--project-name))
+      (insert (denote-generate-overview-content denote-overview-project-name))
       (goto-char (min point (point-max)))
       (message "Overview refreshed"))))
 
-;;; Auto-update Hook
-
-(defun denote-projectile-notes--maybe-update-overview ()
+;; Hook to update overview when saving project notes
+(defun denote-maybe-update-overview ()
   "Update overview if current buffer is a project note."
-  (when (and denote-projectile-notes-overview-auto-update
-             (buffer-file-name)
+  (when (and (buffer-file-name)
              (string-match "/projects/\\([^/]+\\)/" (buffer-file-name))
              (not (string-match "-overview\\.org$" (buffer-file-name))))
     (let* ((project-slug (match-string 1 (buffer-file-name)))
-           (project-name (denote-projectile-notes--unslugify project-slug))
-           (overview-path (denote-projectile-notes--overview-filepath project-name)))
-      (denote-projectile-notes--update-overview project-name)
+           (project-name (denote-unslugify-project-name project-slug))
+           (overview-path (denote-project-overview-filepath project-name)))
+      (denote-update-project-overview project-name)
       (when-let ((overview-buffer (find-buffer-visiting overview-path)))
         (with-current-buffer overview-buffer
-          (let ((inhibit-read-only t))
-            (revert-buffer t t t)))))))
+          (let ((inhibit-read-only t)
+                (point (point)))
+            (revert-buffer t t t)
+            (goto-char (min point (point-max)))))))))
 
-(add-hook 'after-save-hook #'denote-projectile-notes--maybe-update-overview)
-
-;;; Utility Functions
-
-(defun denote-projectile-notes--unslugify (slug)
-  "Convert SLUG back to normal text."
+(defun denote-unslugify-project-name (slug)
+  "Convert SLUG back to project name."
   (replace-regexp-in-string "-" " " slug))
 
-;;; Provide
+(defun denote-create-project-note ()
+  "Create a new project note directly without menu."
+  (interactive)
+  (if-let ((project-name (and (fboundp 'projectile-project-name)
+                              (projectile-project-name))))
+      (denote-open-new-project-note project-name)
+    (message "Not in a projectile project")))
+
+;; Setup hook
+(add-hook 'after-save-hook #'denote-maybe-update-overview)
 
 (provide 'denote-projectile-notes)
-
 ;;; denote-projectile-notes.el ends here
