@@ -389,14 +389,52 @@
              (should (member selected notes)))))))))
 
 ;; Edge case tests
-(ert-deftest denote-projectile-notes-test-extract-content-empty-file ()
-  "Test extracting content from file with only frontmatter."
+(ert-deftest denote-projectile-notes-test-list-notes-excludes-overview ()
+  "Test that listing notes excludes overview files."
   (denote-projectile-notes-test-with-temp-dir
-   (let ((filepath (expand-file-name "empty-note.org" denote-directory)))
-     (with-temp-file filepath
-       (insert "#+title: Empty Note\n#+date: 2024-01-01\n\n"))
-     (let ((content (denote-extract-note-content filepath)))
-       (should (equal "" (string-trim content)))))))
+   (let ((project-name "Test Project"))
+     ;; Create regular notes
+     (denote-projectile-notes-test-create-note project-name "Note 1" "Content 1")
+     (denote-projectile-notes-test-create-note project-name "Note 2" "Content 2")
+
+     ;; Create an overview file
+     (let ((overview-path (denote-project-overview-filepath project-name)))
+       (with-temp-file overview-path
+         (insert "Overview content")))
+
+     ;; List notes should exclude the overview
+     (let ((notes (denote-list-project-notes project-name)))
+       (should (= 2 (length notes)))  ; Only the 2 regular notes
+       (should (cl-every (lambda (f) (not (string-match-p "-overview\\.org$" f))) notes))))))
+
+(ert-deftest denote-projectile-notes-test-overview-no-recursion ()
+  "Test that overview generation doesn't include previous overviews."
+  (denote-projectile-notes-test-with-temp-dir
+   (let ((project-name "Test Project"))
+     ;; Create a note
+     (denote-projectile-notes-test-create-note project-name "Real Note" "Real content")
+
+     ;; Generate first overview
+     (let ((overview1-content (denote-generate-overview-content project-name)))
+       ;; Create the overview file
+       (let ((overview-path (denote-project-overview-filepath project-name)))
+         (with-temp-file overview-path
+           (insert overview1-content)))
+
+       ;; Generate second overview (should not include first overview)
+       (let ((overview2-content (denote-generate-overview-content project-name)))
+         ;; Should only contain "Real Note", not nested overview content
+         (should (string-match-p "Real Note" overview2-content))
+         ;; Should not contain recursive "Overview" sections
+         (should (= 1 (cl-count ?* overview2-content :test #'char-equal))))))))
+
+(ert-deftest denote-projectile-notes-test-empty-content ()
+  "Test handling empty note content."
+  (denote-projectile-notes-test-with-temp-dir
+   (let* ((filepath (denote-projectile-notes-test-create-note
+                     "Project" "Empty Note" ""))
+          (content (denote-extract-note-content filepath)))
+     (should (equal "" (string-trim content))))))
 
 (ert-deftest denote-projectile-notes-test-demote-headers-edge-cases ()
   "Test header demotion with edge cases."

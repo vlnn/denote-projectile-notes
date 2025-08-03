@@ -92,6 +92,14 @@
   "List all note files for PROJECT-NAME."
   (let ((dir (denote-project-notes-directory project-name)))
     (when (file-directory-p dir)
+      (cl-remove-if 
+       (lambda (file) (string-match-p "-overview\\.org$" file))
+       (directory-files dir t "\\.org$")))))
+
+(defun denote-list-project-notes (project-name)
+  "List all note files for PROJECT-NAME."
+  (let ((dir (denote-project-notes-directory project-name)))
+    (when (file-directory-p dir)
       (directory-files dir t "\\.org$"))))
 
 (defun denote-extract-note-title (filepath)
@@ -152,13 +160,30 @@
     (evil-local-set-key 'normal (kbd "q") #'denote-smart-close-popup)
     (evil-local-set-key 'normal (kbd "<escape>") #'denote-smart-close-popup)))
 
+(defun denote-clear-local-keybindings ()
+  "Clear denote-specific local keybindings."
+  (local-unset-key (kbd "g"))
+  (local-unset-key (kbd "RET"))
+  (local-unset-key (kbd "q"))
+  (local-unset-key (kbd "<escape>"))
+  ;; Clear evil bindings if they exist
+  (when (and (featurep 'evil)
+             (fboundp 'evil-local-set-key)
+             (bound-and-true-p evil-mode))
+    (evil-local-set-key 'normal (kbd "g") nil)
+    (evil-local-set-key 'normal (kbd "RET") nil)
+    (evil-local-set-key 'normal (kbd "q") nil)
+    (evil-local-set-key 'normal (kbd "<escape>") nil)))
+
 (defun denote-setup-popup-keybindings ()
   "Setup keybindings for popup buffer."
+  (denote-clear-local-keybindings)
   (denote-setup-base-keybindings)
   (denote-setup-evil-keybindings))
 
 (defun denote-setup-overview-base-keys ()
   "Setup base overview keybindings."
+  (denote-clear-local-keybindings)
   (local-set-key (kbd "g") #'denote-refresh-overview)
   (local-set-key (kbd "RET") #'denote-open-note-at-point))
 
