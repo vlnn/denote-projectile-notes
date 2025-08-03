@@ -1,0 +1,17 @@
+*.elc
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+.elpa/
+*.rel
+/auto/
+.cask/
+dist/
+.projectile
+.dir-locals.el
+/eshell/history
+/eshell/lastdir
+/elpa/
+*.eld
+/network-security.data
